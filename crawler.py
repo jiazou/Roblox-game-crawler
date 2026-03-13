@@ -183,10 +183,12 @@ def read_input_csv(filepath):
     Expected CSV format:
         type,id
         user,12345
+        user,zhangyk2010
         group,67890
 
     The 'type' column should be 'user' or 'group'.
-    The 'id' column should be a numeric Roblox ID.
+    The 'id' column can be a numeric Roblox ID or a username (for users).
+    Usernames are resolved to IDs via the Roblox API.
     """
     user_ids = []
     group_ids = []
@@ -212,11 +214,21 @@ def read_input_csv(filepath):
             entry_type = row[type_col].strip().lower()
             entry_id = row[id_col].strip()
 
-            if not entry_id.isdigit():
-                print(f"Warning: Skipping row {row_num}, invalid ID: {entry_id}")
+            if entry_id.isdigit():
+                entry_id = int(entry_id)
+            elif entry_type == "user":
+                # Treat non-numeric ID as a username and resolve it
+                print(f"Resolving username '{entry_id}'...")
+                resolved = resolve_username(entry_id)
+                if resolved is None:
+                    print(f"Warning: Could not resolve username '{entry_id}' (row {row_num}), skipping")
+                    continue
+                print(f"  Resolved '{entry_id}' -> user ID {resolved}")
+                entry_id = resolved
+            else:
+                print(f"Warning: Skipping row {row_num}, invalid group ID: {entry_id}")
                 continue
 
-            entry_id = int(entry_id)
             if entry_type == "user":
                 user_ids.append(entry_id)
             elif entry_type == "group":
