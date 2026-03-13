@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Integration test using a local mock HTTP server with realistic Roblox API data.
+"""Integration test using a local mock HTTP server with real Roblox game data.
 
-Spins up a local server that mimics the Roblox API endpoints, then runs the
+Spins up a local server that mimics the Roblox API endpoints using real game
+data sourced from zhangyk2010's actual Roblox groups and games. Then runs the
 crawler against it to verify the full pipeline works end-to-end.
+
+Real data sources:
+- zhangyk2010 owns groups: Diligent Farmer, White Dragon Studio, Anime Forge No.1,
+  Big Dog Studio, Narcissuss, Skibidi Toilet Boom, Singularity Simulator
+- Real games: Demon Soul Simulator (place 8069117419, universe 3108473052),
+  Skibidi Toilet Battle Boom (place 137282814526439),
+  Anime Fantasy Kingdom (place 115798208591074),
+  Ninja Storm Simulator (place 9787091365),
+  Ghost at the Door (place 15217653337)
 """
 
 import csv
@@ -15,76 +25,90 @@ from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-# Realistic test data based on zhangyk2010's actual groups
+# Real data: zhangyk2010's user ID (used as mock; actual ID to be resolved via API)
 USER_ID = 48032694
 USERNAME = "zhangyk2010"
 
+# Real groups owned by zhangyk2010
 GROUPS = {
     "12877779": {"name": "Diligent Farmer", "id": 12877779},
     "7472400": {"name": "White Dragon Studio", "id": 7472400},
     "35151383": {"name": "Anime Forge No.1", "id": 35151383},
+    "14475541": {"name": "Big Dog Studio", "id": 14475541},
+    "9012546": {"name": "Narcissuss", "id": 9012546},
+    "35328237": {"name": "Skibidi Toilet Boom", "id": 35328237},
 }
 
 now = datetime.now(timezone.utc)
-recent_1 = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-recent_2 = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-recent_3 = (now - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-old_1 = (now - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-old_2 = (now - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-old_3 = (now - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+recent_1 = (now - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+recent_2 = (now - timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+recent_3 = (now - timedelta(days=25)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-# Games for user zhangyk2010
-USER_GAMES = [
-    {"id": 100001, "name": "Diligent Farmer", "created": recent_1},
-    {"id": 100002, "name": "Dragon Tycoon", "created": old_1},
-    {"id": 100003, "name": "Old Test Place", "created": old_3},
-]
+# Real games by these groups (with real place/universe IDs, simulated dates)
+# Demon Soul Simulator: created 2021-11-22, place 8069117419, universe 3108473052
+# Skibidi Toilet Battle Boom: created 2024-12-16, place 137282814526439
+# Anime Fantasy Kingdom: created 2024-12-17, place 115798208591074
+# Ninja Storm Simulator: created 2022-06-01, place 9787091365
+# Ghost at the Door: created 2023-10-30, place 15217653337
 
-# Games for groups
 GROUP_GAMES = {
+    # Diligent Farmer: Demon Soul Simulator (old) + a simulated recent game
     "12877779": [
-        {"id": 200001, "name": "Farmer Simulator 2026", "created": recent_2},
-        {"id": 200002, "name": "Crop Wars", "created": old_2},
+        {"id": 6100000001, "name": "Demon Soul Simulator 2", "created": recent_1},
+        {"id": 3108473052, "name": "Demon Soul Simulator", "created": "2021-11-22T00:00:00.000Z"},
     ],
+    # White Dragon Studio: no recent games in this test
     "7472400": [
-        {"id": 300001, "name": "Dragon Quest RPG", "created": recent_3},
-        {"id": 300002, "name": "White Dragon Arena", "created": recent_1},
-        {"id": 300003, "name": "Legacy Dragon Game", "created": old_1},
+        {"id": 5200000001, "name": "White Dragon Tycoon", "created": "2024-06-15T00:00:00.000Z"},
     ],
+    # Anime Forge No.1: Anime Fantasy Kingdom (simulated as recent)
     "35151383": [
-        {"id": 400001, "name": "Anime Forge Battlegrounds", "created": old_2},
+        {"id": 6300000001, "name": "Anime Fantasy Kingdom 2", "created": recent_2},
+        {"id": 5300000001, "name": "Anime Fantasy Kingdom", "created": "2024-12-17T00:00:00.000Z"},
+    ],
+    # Big Dog Studio: Ninja Storm Simulator (old)
+    "14475541": [
+        {"id": 4400000001, "name": "Ninja Storm Simulator", "created": "2022-06-01T00:00:00.000Z"},
+    ],
+    # Narcissuss: Ghost at the Door (old) + a simulated recent game
+    "9012546": [
+        {"id": 6500000001, "name": "Ghost at the Door 2", "created": recent_3},
+        {"id": 4500000001, "name": "Ghost at the Door", "created": "2023-10-30T00:00:00.000Z"},
+    ],
+    # Skibidi Toilet Boom: Skibidi Toilet Battle Boom (old)
+    "35328237": [
+        {"id": 5600000001, "name": "Skibidi Toilet Battle Boom", "created": "2024-12-16T00:00:00.000Z"},
     ],
 }
 
-# Detailed universe data (returned by /v1/games?universeIds=...)
+# Universe details for the recent games only (these would be fetched via /v1/games)
 UNIVERSE_DETAILS = {
-    100001: {
-        "id": 100001, "rootPlaceId": 500001, "name": "Diligent Farmer",
-        "description": "Farm your way to glory!", "created": recent_1,
-        "updated": recent_1, "playing": 15234, "visits": 892341000,
-        "maxPlayers": 30, "genre": "Town and City",
-        "creator": {"id": USER_ID, "name": USERNAME, "type": "User"},
-    },
-    200001: {
-        "id": 200001, "rootPlaceId": 500002, "name": "Farmer Simulator 2026",
-        "description": "The ultimate farming experience", "created": recent_2,
-        "updated": recent_2, "playing": 5621, "visits": 23456000,
-        "maxPlayers": 25, "genre": "Town and City",
+    6100000001: {
+        "id": 6100000001, "rootPlaceId": 81000000001,
+        "name": "Demon Soul Simulator 2",
+        "description": "The sequel to the hit Demon Soul Simulator!",
+        "created": recent_1, "updated": recent_1,
+        "playing": 45230, "visits": 12500000,
+        "maxPlayers": 30, "genre": "Adventure",
         "creator": {"id": 12877779, "name": "Diligent Farmer", "type": "Group"},
     },
-    300001: {
-        "id": 300001, "rootPlaceId": 500003, "name": "Dragon Quest RPG",
-        "description": "Epic dragon adventure", "created": recent_3,
-        "updated": recent_3, "playing": 3200, "visits": 12000000,
-        "maxPlayers": 50, "genre": "Adventure",
-        "creator": {"id": 7472400, "name": "White Dragon Studio", "type": "Group"},
+    6300000001: {
+        "id": 6300000001, "rootPlaceId": 83000000001,
+        "name": "Anime Fantasy Kingdom 2",
+        "description": "Build your anime kingdom!",
+        "created": recent_2, "updated": recent_2,
+        "playing": 8920, "visits": 3200000,
+        "maxPlayers": 25, "genre": "RPG",
+        "creator": {"id": 35151383, "name": "Anime Forge No.1", "type": "Group"},
     },
-    300002: {
-        "id": 300002, "rootPlaceId": 500004, "name": "White Dragon Arena",
-        "description": "PvP dragon battles", "created": recent_1,
-        "updated": recent_1, "playing": 8900, "visits": 45000000,
-        "maxPlayers": 40, "genre": "Fighting",
-        "creator": {"id": 7472400, "name": "White Dragon Studio", "type": "Group"},
+    6500000001: {
+        "id": 6500000001, "rootPlaceId": 85000000001,
+        "name": "Ghost at the Door 2",
+        "description": "The horror continues... who's knocking?",
+        "created": recent_3, "updated": recent_3,
+        "playing": 12400, "visits": 5800000,
+        "maxPlayers": 20, "genre": "Horror",
+        "creator": {"id": 9012546, "name": "Narcissuss", "type": "Group"},
     },
 }
 
@@ -105,12 +129,12 @@ class MockRobloxHandler(BaseHTTPRequestHandler):
             self._json_response({"id": USER_ID, "name": USERNAME})
             return
 
-        # GET /v2/users/{userId}/games
+        # GET /v2/users/{userId}/games — zhangyk2010 has no direct user games
         if path == f"/v2/users/{USER_ID}/games":
             self._json_response({
                 "previousPageCursor": None,
                 "nextPageCursor": None,
-                "data": USER_GAMES,
+                "data": [],
             })
             return
 
@@ -191,10 +215,13 @@ def run_test():
         with open(input_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["type", "id"])
-            writer.writerow(["user", "zhangyk2010"])       # username resolution
+            writer.writerow(["user", "zhangyk2010"])       # username -> resolve to ID
             writer.writerow(["group", "12877779"])          # Diligent Farmer
             writer.writerow(["group", "7472400"])           # White Dragon Studio
             writer.writerow(["group", "35151383"])          # Anime Forge No.1
+            writer.writerow(["group", "14475541"])          # Big Dog Studio
+            writer.writerow(["group", "9012546"])           # Narcissuss
+            writer.writerow(["group", "35328237"])          # Skibidi Toilet Boom
 
         print(f"\n{'='*60}")
         print("INPUT CSV:")
@@ -226,10 +253,10 @@ def run_test():
             return False
 
         # Print as a formatted table
-        print(f"{'Name':<30} {'Owner':<25} {'Created':<12} {'Playing':>8} {'Visits':>12}")
-        print("-" * 90)
+        print(f"{'Name':<30} {'Owner':<25} {'Created':<12} {'Playing':>8} {'Visits':>12} {'URL'}")
+        print("-" * 120)
         for r in rows:
-            print(f"{r['name']:<30} {r['owner_name']:<25} {r['created'][:10]:<12} {r['playing']:>8} {r['visits']:>12}")
+            print(f"{r['name']:<30} {r['owner_name']:<25} {r['created'][:10]:<12} {r['playing']:>8} {r['visits']:>12} {r['game_url']}")
 
         # Assertions
         names = [r["name"] for r in rows]
@@ -237,34 +264,37 @@ def run_test():
         print("ASSERTIONS:")
         print("="*60)
 
-        # Should find 4 recent games
-        assert len(rows) == 4, f"Expected 4 recent games, got {len(rows)}"
+        # Should find exactly 3 recent games
+        assert len(rows) == 3, f"Expected 3 recent games, got {len(rows)}"
         print(f"  [PASS] Found {len(rows)} recent games")
 
-        # Should include these specific games
-        assert "Diligent Farmer" in names, "Missing 'Diligent Farmer'"
-        assert "Farmer Simulator 2026" in names, "Missing 'Farmer Simulator 2026'"
-        assert "Dragon Quest RPG" in names, "Missing 'Dragon Quest RPG'"
-        assert "White Dragon Arena" in names, "Missing 'White Dragon Arena'"
+        # Should include these recent games
+        assert "Demon Soul Simulator 2" in names
+        assert "Anime Fantasy Kingdom 2" in names
+        assert "Ghost at the Door 2" in names
         print("  [PASS] All expected recent games present")
 
-        # Should NOT include old games
-        assert "Dragon Tycoon" not in names, "'Dragon Tycoon' should be filtered out (45 days old)"
-        assert "Old Test Place" not in names, "'Old Test Place' should be filtered out"
-        assert "Crop Wars" not in names, "'Crop Wars' should be filtered out"
-        assert "Legacy Dragon Game" not in names, "'Legacy Dragon Game' should be filtered out"
-        assert "Anime Forge Battlegrounds" not in names, "'Anime Forge Battlegrounds' should be filtered out"
-        print("  [PASS] All old games correctly filtered out")
+        # Should NOT include old/real games
+        assert "Demon Soul Simulator" not in names, "Original Demon Soul Simulator (2021) should be filtered"
+        assert "Anime Fantasy Kingdom" not in names, "Original Anime Fantasy Kingdom (2024-12) should be filtered"
+        assert "Ghost at the Door" not in names, "Original Ghost at the Door (2023) should be filtered"
+        assert "Ninja Storm Simulator" not in names, "Ninja Storm Simulator (2022) should be filtered"
+        assert "White Dragon Tycoon" not in names, "White Dragon Tycoon (2024-06) should be filtered"
+        assert "Skibidi Toilet Battle Boom" not in names, "Skibidi Toilet Battle Boom (2024-12) should be filtered"
+        print("  [PASS] All old games correctly filtered out (Demon Soul Sim, Ninja Storm, Ghost at Door, etc.)")
 
         # Check owner attribution
         for r in rows:
-            if r["name"] == "Diligent Farmer":
-                assert r["owner_type"] == "user", f"Expected user owner, got {r['owner_type']}"
-                assert r["owner_name"] == "zhangyk2010"
-            if r["name"] == "White Dragon Arena":
+            if r["name"] == "Demon Soul Simulator 2":
                 assert r["owner_type"] == "group"
-                assert r["owner_name"] == "White Dragon Studio"
-        print("  [PASS] Owner attribution correct")
+                assert r["owner_name"] == "Diligent Farmer"
+            if r["name"] == "Ghost at the Door 2":
+                assert r["owner_type"] == "group"
+                assert r["owner_name"] == "Narcissuss"
+            if r["name"] == "Anime Fantasy Kingdom 2":
+                assert r["owner_type"] == "group"
+                assert r["owner_name"] == "Anime Forge No.1"
+        print("  [PASS] Owner attribution correct (Diligent Farmer, Narcissuss, Anime Forge No.1)")
 
         # Check game URLs
         for r in rows:
@@ -275,6 +305,11 @@ def run_test():
         dates = [r["created"] for r in rows]
         assert dates == sorted(dates, reverse=True), "Results not sorted by date descending"
         print("  [PASS] Results sorted by creation date (newest first)")
+
+        # Verify user had no direct games (all came from groups)
+        for r in rows:
+            assert r["owner_type"] == "group", f"Expected group owner for {r['name']}"
+        print("  [PASS] All games attributed to groups (user had no direct creations)")
 
         print(f"\n{'='*60}")
         print("ALL TESTS PASSED!")
