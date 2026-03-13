@@ -375,7 +375,7 @@ def main():
 
     print(f"\nFound {len(results)} game(s) created in the last {args.days} days:")
     for r in results:
-        print(f"  - {r['name']} (by {r['owner_name']}, created {r['created'][:10]})")
+        print(f"  - {r['name']} (by {r['owner_name']}, created {r['created'][:10]}) {r['game_url']}")
 
     # Write output
     write_output_csv(args.output, results)
