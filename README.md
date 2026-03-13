@@ -2,6 +2,8 @@
 
 Finds all Roblox games (experiences) owned by specified users or groups that were created within a given time window (default: last 30 days).
 
+Groups owned by each user are **automatically discovered** — just provide the username and the crawler will find all their groups and crawl those too.
+
 ## Setup
 
 ```bash
@@ -15,24 +17,15 @@ pip install -r requirements.txt
 ```csv
 type,id
 user,zhangyk2010
-group,12877779
-group,7472400
 ```
 
-The included `input.csv` is pre-configured with zhangyk2010's account and all associated groups:
+That's it — the crawler will automatically discover all groups owned by the user and crawl them. You can also add explicit group IDs if needed:
 
-| Type | ID | Name |
-|------|-----|------|
-| user | zhangyk2010 | zhangyk2010 (username, resolved at runtime) |
-| group | 12877779 | Diligent Farmer |
-| group | 7472400 | White Dragon Studio |
-| group | 35151383 | Anime Forge No.1 |
-| group | 14475541 | Big Dog Studio |
-| group | 9012546 | Narcissuss |
-| group | 35328237 | Skibidi Toilet Boom |
-| group | 34506269 | Where is my mom |
-| group | 737824921 | Singularity Simulator |
-| group | 34062817 | Skibidi Toilet Boom Studio |
+```csv
+type,id
+user,zhangyk2010
+group,12877779
+```
 
 2. Run the crawler:
 
@@ -79,8 +72,10 @@ The output CSV contains the following columns:
 
 ## API Endpoints Used
 
+- `users.roblox.com/v1/usernames/users` — username to user ID resolution
+- `users.roblox.com/v1/users/{id}` — username lookup
+- `groups.roblox.com/v1/users/{id}/groups/roles` — discover groups owned by user
+- `groups.roblox.com/v1/groups/{id}` — group name lookup
 - `games.roblox.com/v2/users/{id}/games` — games by user
 - `games.roblox.com/v2/groups/{id}/games` — games by group
 - `games.roblox.com/v1/games?universeIds=...` — universe details (creation date)
-- `users.roblox.com/v1/users/{id}` — username lookup
-- `groups.roblox.com/v1/groups/{id}` — group name lookup

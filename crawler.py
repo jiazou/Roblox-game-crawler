@@ -161,6 +161,27 @@ def get_universe_details(universe_ids):
     return all_details
 
 
+def get_user_groups(user_id):
+    """Fetch all groups owned by a user.
+
+    Uses the groups API to get all groups a user belongs to, then filters
+    for groups where the user has the Owner role (rank 255).
+    Returns a list of (group_id, group_name) tuples.
+    """
+    data = make_request(f"{GROUPS_URL}/v1/users/{user_id}/groups/roles")
+    if not data:
+        return []
+
+    owned_groups = []
+    for entry in data.get("data", []):
+        role = entry.get("role", {})
+        group = entry.get("group", {})
+        if role.get("rank") == 255:
+            owned_groups.append((group["id"], group.get("name", f"Group {group['id']}")))
+
+    return owned_groups
+
+
 def get_group_name(group_id):
     """Fetch the name of a group."""
     data = make_request(f"{GROUPS_URL}/v1/groups/{group_id}")
@@ -297,6 +318,27 @@ def main():
     if not user_ids and not group_ids:
         print("No valid user or group IDs found in input. Exiting.")
         sys.exit(0)
+
+    # Auto-discover groups owned by each user
+    group_ids_set = set(group_ids)
+    for user_id in user_ids:
+        print(f"Discovering groups owned by user ID {user_id}...")
+        owned = get_user_groups(user_id)
+        new_count = 0
+        for gid, gname in owned:
+            if gid not in group_ids_set:
+                group_ids.append(gid)
+                group_ids_set.add(gid)
+                new_count += 1
+                print(f"  Found group: {gname} (ID: {gid})")
+        if new_count == 0 and not owned:
+            print("  No owned groups found")
+        elif new_count == 0:
+            print(f"  All {len(owned)} owned group(s) already in input")
+        else:
+            print(f"  Added {new_count} new group(s)")
+
+    print(f"Total: {len(user_ids)} user(s) and {len(group_ids)} group(s) to crawl")
 
     # Collect all universe listings with their owner info
     universe_owner_map = {}  # universe_id -> (owner_type, owner_id, owner_name)

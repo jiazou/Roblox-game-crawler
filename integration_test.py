@@ -129,6 +129,17 @@ class MockRobloxHandler(BaseHTTPRequestHandler):
             self._json_response({"id": USER_ID, "name": USERNAME})
             return
 
+        # GET /v1/users/{userId}/groups/roles — return groups owned by user
+        if path == f"/v1/users/{USER_ID}/groups/roles":
+            group_roles = []
+            for gid, info in GROUPS.items():
+                group_roles.append({
+                    "group": {"id": info["id"], "name": info["name"]},
+                    "role": {"id": 1, "name": "Owner", "rank": 255},
+                })
+            self._json_response({"data": group_roles})
+            return
+
         # GET /v2/users/{userId}/games — zhangyk2010 has no direct user games
         if path == f"/v2/users/{USER_ID}/games":
             self._json_response({
@@ -215,13 +226,7 @@ def run_test():
         with open(input_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["type", "id"])
-            writer.writerow(["user", "zhangyk2010"])       # username -> resolve to ID
-            writer.writerow(["group", "12877779"])          # Diligent Farmer
-            writer.writerow(["group", "7472400"])           # White Dragon Studio
-            writer.writerow(["group", "35151383"])          # Anime Forge No.1
-            writer.writerow(["group", "14475541"])          # Big Dog Studio
-            writer.writerow(["group", "9012546"])           # Narcissuss
-            writer.writerow(["group", "35328237"])          # Skibidi Toilet Boom
+            writer.writerow(["user", "zhangyk2010"])       # only the username — groups auto-discovered
 
         print(f"\n{'='*60}")
         print("INPUT CSV:")

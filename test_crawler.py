@@ -319,10 +319,12 @@ def test_full_pipeline(mock_resolve, mock_req, input_csv_path, output_csv_path):
         writer.writerow(["user", "zhangyk2010"])
 
     # Mock API responses in order:
-    # 1. get_username(42)
-    # 2. get_user_games page 1
-    # 3. get_universe_details
+    # 1. get_user_groups(42) — no owned groups
+    # 2. get_username(42)
+    # 3. get_user_games page 1
+    # 4. get_universe_details
     mock_req.side_effect = [
+        {"data": []},  # get_user_groups — no owned groups
         {"name": "zhangyk2010", "id": 42},  # get_username
         {  # get_user_games
             "data": [
