@@ -77,13 +77,17 @@ def resolve_username(username):
     return None
 
 
-def get_user_games(user_id):
-    """Fetch all games/universes created by a user."""
+def get_user_games(user_id, cutoff_date=None):
+    """Fetch all games/universes created by a user.
+
+    If cutoff_date is provided, stops paginating once games older than the
+    cutoff are encountered (relies on Desc sort order by creation date).
+    """
     universes = []
     cursor = None
 
     while True:
-        params = {"sortOrder": "Desc", "limit": 50}
+        params = {"sortOrder": "Desc", "limit": 50, "accessFilter": 2}
         if cursor:
             params["cursor"] = cursor
 
@@ -91,23 +95,33 @@ def get_user_games(user_id):
         if not data:
             break
 
+        hit_old_game = False
         for item in data.get("data", []):
+            if cutoff_date and item.get("created"):
+                created_dt = parse_datetime(item["created"])
+                if created_dt < cutoff_date:
+                    hit_old_game = True
+                    continue
             universes.append(item)
 
         cursor = data.get("nextPageCursor")
-        if not cursor:
+        if not cursor or hit_old_game:
             break
 
     return universes
 
 
-def get_group_games(group_id):
-    """Fetch all games/universes owned by a group."""
+def get_group_games(group_id, cutoff_date=None):
+    """Fetch all games/universes owned by a group.
+
+    If cutoff_date is provided, stops paginating once games older than the
+    cutoff are encountered (relies on Desc sort order by creation date).
+    """
     universes = []
     cursor = None
 
     while True:
-        params = {"sortOrder": "Desc", "limit": 100}
+        params = {"sortOrder": "Desc", "limit": 100, "accessFilter": 2}
         if cursor:
             params["cursor"] = cursor
 
@@ -115,11 +129,17 @@ def get_group_games(group_id):
         if not data:
             break
 
+        hit_old_game = False
         for item in data.get("data", []):
+            if cutoff_date and item.get("created"):
+                created_dt = parse_datetime(item["created"])
+                if created_dt < cutoff_date:
+                    hit_old_game = True
+                    continue
             universes.append(item)
 
         cursor = data.get("nextPageCursor")
-        if not cursor:
+        if not cursor or hit_old_game:
             break
 
     return universes
@@ -273,7 +293,7 @@ def main():
     for user_id in user_ids:
         username = get_username(user_id)
         print(f"Fetching games for user {username} (ID: {user_id})...")
-        games = get_user_games(user_id)
+        games = get_user_games(user_id, cutoff_date)
         print(f"  Found {len(games)} game(s)")
         for game in games:
             uid = game.get("id")
@@ -284,7 +304,7 @@ def main():
     for group_id in group_ids:
         group_name = get_group_name(group_id)
         print(f"Fetching games for group {group_name} (ID: {group_id})...")
-        games = get_group_games(group_id)
+        games = get_group_games(group_id, cutoff_date)
         print(f"  Found {len(games)} game(s)")
         for game in games:
             uid = game.get("id")
