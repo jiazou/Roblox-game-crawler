@@ -330,7 +330,18 @@ def parse_datetime(dt_str):
     """Parse a Roblox API datetime string to a timezone-aware datetime."""
     # Roblox uses ISO 8601 format like "2024-01-15T12:00:00.000Z"
     dt_str = dt_str.replace("Z", "+00:00")
-    return datetime.fromisoformat(dt_str)
+    try:
+        return datetime.fromisoformat(dt_str)
+    except ValueError:
+        # Python < 3.11 doesn't handle all ISO 8601 variants;
+        # normalize fractional seconds to 6 digits for compatibility.
+        import re
+        m = re.match(r"(.*)\.(\d+)([+-]\d{2}:\d{2})$", dt_str)
+        if m:
+            frac = m.group(2).ljust(6, "0")[:6]
+            dt_str = f"{m.group(1)}.{frac}{m.group(3)}"
+            return datetime.fromisoformat(dt_str)
+        raise
 
 
 def main():
