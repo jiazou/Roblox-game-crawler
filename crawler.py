@@ -12,11 +12,15 @@ Usage:
 
 import argparse
 import csv
+import json
+import logging
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 
 import requests
+
+logger = logging.getLogger("crawler")
 
 BASE_URL = "https://games.roblox.com"
 USERS_URL = "https://users.roblox.com"
@@ -33,47 +37,65 @@ MAX_RETRIES = 3
 RETRY_BACKOFF = 2  # seconds, doubled each retry
 
 
+def _truncate(text, max_len=1000):
+    """Truncate text for logging, adding an indicator if truncated."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + f"... ({len(text) - max_len} more chars)"
+
+
 def make_request(url, params=None):
     """Make a GET request with retry logic and rate limiting."""
     for attempt in range(MAX_RETRIES):
         try:
+            full_url = requests.Request("GET", url, params=params).prepare().url
+            logger.debug("GET %s", full_url)
             resp = requests.get(url, params=params, timeout=15)
+            logger.debug("  -> %s %s (%d bytes)", resp.status_code, resp.reason, len(resp.content))
             if resp.status_code == 429:
                 wait = RETRY_BACKOFF * (2 ** attempt)
-                print(f"  Rate limited, waiting {wait}s...")
+                logger.warning("  Rate limited, waiting %ds...", wait)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
+            body = resp.json()
+            logger.debug("  -> body: %s", _truncate(json.dumps(body)))
             time.sleep(REQUEST_DELAY)
-            return resp.json()
+            return body
         except requests.exceptions.RequestException as e:
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_BACKOFF * (2 ** attempt)
-                print(f"  Request failed ({e}), retrying in {wait}s...")
+                logger.warning("  Request failed (%s), retrying in %ds...", e, wait)
                 time.sleep(wait)
             else:
-                print(f"  Request failed after {MAX_RETRIES} attempts: {e}")
+                logger.error("  Request failed after %d attempts: %s", MAX_RETRIES, e)
                 return None
     return None
 
 
 def resolve_username(username):
     """Resolve a Roblox username to a user ID."""
+    post_url = f"{USERS_URL}/v1/usernames/users"
+    post_body = {"usernames": [username], "excludeBannedUsers": False}
+    logger.debug("POST %s  body: %s", post_url, json.dumps(post_body))
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(
-                f"{USERS_URL}/v1/usernames/users",
-                json={"usernames": [username], "excludeBannedUsers": False},
-                timeout=15,
-            )
+            resp = requests.post(post_url, json=post_body, timeout=15)
+            logger.debug("  -> %s %s (%d bytes)", resp.status_code, resp.reason, len(resp.content))
             resp.raise_for_status()
             result = resp.json()
+            logger.debug("  -> body: %s", _truncate(json.dumps(result)))
             if result.get("data"):
                 return result["data"][0]["id"]
+            logger.warning("  Username '%s' not found in response", username)
             return None
-        except requests.exceptions.RequestException:
+        except requests.exceptions.RequestException as e:
             if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_BACKOFF * (2 ** attempt))
+                wait = RETRY_BACKOFF * (2 ** attempt)
+                logger.warning("  POST failed (%s), retrying in %ds...", e, wait)
+                time.sleep(wait)
+            else:
+                logger.error("  POST failed after %d attempts: %s", MAX_RETRIES, e)
     return None
 
 
@@ -95,13 +117,18 @@ def get_user_games(user_id, cutoff_date=None):
         if not data:
             break
 
+        page_items = data.get("data", [])
+        logger.info("  Page returned %d game(s)", len(page_items))
         hit_old_game = False
-        for item in data.get("data", []):
-            if cutoff_date and item.get("created"):
-                created_dt = parse_datetime(item["created"])
+        for item in page_items:
+            created_str = item.get("created", "")
+            if cutoff_date and created_str:
+                created_dt = parse_datetime(created_str)
                 if created_dt < cutoff_date:
+                    logger.info("    Skipping old game id=%s created=%s", item.get("id"), created_str)
                     hit_old_game = True
                     continue
+            logger.info("    Keeping game id=%s name=%s created=%s", item.get("id"), item.get("name"), created_str)
             universes.append(item)
 
         cursor = data.get("nextPageCursor")
@@ -129,13 +156,18 @@ def get_group_games(group_id, cutoff_date=None):
         if not data:
             break
 
+        page_items = data.get("data", [])
+        logger.info("  Page returned %d game(s)", len(page_items))
         hit_old_game = False
-        for item in data.get("data", []):
-            if cutoff_date and item.get("created"):
-                created_dt = parse_datetime(item["created"])
+        for item in page_items:
+            created_str = item.get("created", "")
+            if cutoff_date and created_str:
+                created_dt = parse_datetime(created_str)
                 if created_dt < cutoff_date:
+                    logger.info("    Skipping old game id=%s created=%s", item.get("id"), created_str)
                     hit_old_game = True
                     continue
+            logger.info("    Keeping game id=%s name=%s created=%s", item.get("id"), item.get("name"), created_str)
             universes.append(item)
 
         cursor = data.get("nextPageCursor")
@@ -154,11 +186,41 @@ def get_universe_details(universe_ids):
     for i in range(0, len(universe_ids), UNIVERSE_BATCH_SIZE):
         batch = universe_ids[i : i + UNIVERSE_BATCH_SIZE]
         ids_param = ",".join(str(uid) for uid in batch)
+        logger.info("  Fetching details for batch of %d universe(s): %s", len(batch), ids_param)
         data = make_request(f"{BASE_URL}/v1/games", {"universeIds": ids_param})
         if data and "data" in data:
+            for d in data["data"]:
+                logger.info("    Universe %s: name=%s created=%s", d.get("id"), d.get("name"), d.get("created"))
             all_details.extend(data["data"])
+        else:
+            logger.warning("  No data returned for batch")
 
     return all_details
+
+
+def get_user_groups(user_id):
+    """Fetch all groups owned by a user.
+
+    Uses the groups API to get all groups a user belongs to, then filters
+    for groups where the user has the Owner role (rank 255).
+    Returns a list of (group_id, group_name) tuples.
+    """
+    data = make_request(f"{GROUPS_URL}/v1/users/{user_id}/groups/roles")
+    if not data:
+        return []
+
+    owned_groups = []
+    for entry in data.get("data", []):
+        role = entry.get("role", {})
+        group = entry.get("group", {})
+        logger.debug("  Group %s (%s) — role=%s rank=%s",
+                      group.get("id"), group.get("name"), role.get("name"), role.get("rank"))
+        if role.get("rank") == 255:
+            owned_groups.append((group["id"], group.get("name", f"Group {group['id']}")))
+
+    logger.info("  User %s owns %d group(s) out of %d total memberships",
+                user_id, len(owned_groups), len(data.get("data", [])))
+    return owned_groups
 
 
 def get_group_name(group_id):
@@ -285,7 +347,26 @@ def main():
         default=30,
         help="Look back this many days for new games (default: 30)",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity (-v for INFO, -vv for DEBUG with full request/response details)",
+    )
     args = parser.parse_args()
+
+    # Configure logging based on verbosity
+    if args.verbose >= 2:
+        log_level = logging.DEBUG
+    elif args.verbose >= 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=args.days)
     print(f"Finding games created after {cutoff_date.strftime('%Y-%m-%d %H:%M UTC')}")
@@ -297,6 +378,27 @@ def main():
     if not user_ids and not group_ids:
         print("No valid user or group IDs found in input. Exiting.")
         sys.exit(0)
+
+    # Auto-discover groups owned by each user
+    group_ids_set = set(group_ids)
+    for user_id in user_ids:
+        print(f"Discovering groups owned by user ID {user_id}...")
+        owned = get_user_groups(user_id)
+        new_count = 0
+        for gid, gname in owned:
+            if gid not in group_ids_set:
+                group_ids.append(gid)
+                group_ids_set.add(gid)
+                new_count += 1
+                print(f"  Found group: {gname} (ID: {gid})")
+        if new_count == 0 and not owned:
+            print("  No owned groups found")
+        elif new_count == 0:
+            print(f"  All {len(owned)} owned group(s) already in input")
+        else:
+            print(f"  Added {new_count} new group(s)")
+
+    print(f"Total: {len(user_ids)} user(s) and {len(group_ids)} group(s) to crawl")
 
     # Collect all universe listings with their owner info
     universe_owner_map = {}  # universe_id -> (owner_type, owner_id, owner_name)
@@ -375,7 +477,7 @@ def main():
 
     print(f"\nFound {len(results)} game(s) created in the last {args.days} days:")
     for r in results:
-        print(f"  - {r['name']} (by {r['owner_name']}, created {r['created'][:10]})")
+        print(f"  - {r['name']} (by {r['owner_name']}, created {r['created'][:10]}) {r['game_url']}")
 
     # Write output
     write_output_csv(args.output, results)
