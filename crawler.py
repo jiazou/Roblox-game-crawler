@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import logging
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -44,13 +45,12 @@ def _truncate(text, max_len=1000):
     return text[:max_len] + f"... ({len(text) - max_len} more chars)"
 
 
-def make_request(url, params=None):
-    """Make a GET request with retry logic and rate limiting."""
+def make_request(url, params=None, method="GET", json_body=None):
+    """Make an HTTP request with retry logic and rate limiting."""
     for attempt in range(MAX_RETRIES):
         try:
-            full_url = requests.Request("GET", url, params=params).prepare().url
-            logger.debug("GET %s", full_url)
-            resp = requests.get(url, params=params, timeout=15)
+            logger.debug("%s %s params=%s", method, url, params)
+            resp = requests.request(method, url, params=params, json=json_body, timeout=15)
             logger.debug("  -> %s %s (%d bytes)", resp.status_code, resp.reason, len(resp.content))
             if resp.status_code == 429:
                 wait = RETRY_BACKOFF * (2 ** attempt)
@@ -75,74 +75,22 @@ def make_request(url, params=None):
 
 def resolve_username(username):
     """Resolve a Roblox username to a user ID."""
-    post_url = f"{USERS_URL}/v1/usernames/users"
-    post_body = {"usernames": [username], "excludeBannedUsers": False}
-    logger.debug("POST %s  body: %s", post_url, json.dumps(post_body))
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.post(post_url, json=post_body, timeout=15)
-            logger.debug("  -> %s %s (%d bytes)", resp.status_code, resp.reason, len(resp.content))
-            resp.raise_for_status()
-            result = resp.json()
-            logger.debug("  -> body: %s", _truncate(json.dumps(result)))
-            if result.get("data"):
-                return result["data"][0]["id"]
-            logger.warning("  Username '%s' not found in response", username)
-            return None
-        except requests.exceptions.RequestException as e:
-            if attempt < MAX_RETRIES - 1:
-                wait = RETRY_BACKOFF * (2 ** attempt)
-                logger.warning("  POST failed (%s), retrying in %ds...", e, wait)
-                time.sleep(wait)
-            else:
-                logger.error("  POST failed after %d attempts: %s", MAX_RETRIES, e)
+    result = make_request(
+        f"{USERS_URL}/v1/usernames/users",
+        method="POST",
+        json_body={"usernames": [username], "excludeBannedUsers": False},
+    )
+    if result and result.get("data"):
+        return result["data"][0]["id"]
+    logger.warning("Username '%s' not found", username)
     return None
 
 
-def get_user_games(user_id, cutoff_date=None):
-    """Fetch all games/universes created by a user.
+def get_games(url, cutoff_date=None):
+    """Fetch all games/universes from a paginated Roblox endpoint.
 
-    If cutoff_date is provided, stops paginating once games older than the
-    cutoff are encountered (relies on Desc sort order by creation date).
-    """
-    universes = []
-    cursor = None
-
-    while True:
-        params = {"sortOrder": "Desc", "limit": 50, "accessFilter": 2}
-        if cursor:
-            params["cursor"] = cursor
-
-        data = make_request(f"{BASE_URL}/v2/users/{user_id}/games", params)
-        if not data:
-            break
-
-        page_items = data.get("data", [])
-        logger.info("  Page returned %d game(s)", len(page_items))
-        hit_old_game = False
-        for item in page_items:
-            created_str = item.get("created", "")
-            if cutoff_date and created_str:
-                created_dt = parse_datetime(created_str)
-                if created_dt < cutoff_date:
-                    logger.info("    Skipping old game id=%s created=%s", item.get("id"), created_str)
-                    hit_old_game = True
-                    continue
-            logger.info("    Keeping game id=%s name=%s created=%s", item.get("id"), item.get("name"), created_str)
-            universes.append(item)
-
-        cursor = data.get("nextPageCursor")
-        if not cursor or hit_old_game:
-            break
-
-    return universes
-
-
-def get_group_games(group_id, cutoff_date=None):
-    """Fetch all games/universes owned by a group.
-
-    If cutoff_date is provided, stops paginating once games older than the
-    cutoff are encountered (relies on Desc sort order by creation date).
+    Stops paginating once games older than cutoff_date are encountered
+    (relies on Desc sort order by creation date).
     """
     universes = []
     cursor = None
@@ -152,7 +100,7 @@ def get_group_games(group_id, cutoff_date=None):
         if cursor:
             params["cursor"] = cursor
 
-        data = make_request(f"{BASE_URL}/v2/groups/{group_id}/games", params)
+        data = make_request(url, params)
         if not data:
             break
 
@@ -162,8 +110,7 @@ def get_group_games(group_id, cutoff_date=None):
         for item in page_items:
             created_str = item.get("created", "")
             if cutoff_date and created_str:
-                created_dt = parse_datetime(created_str)
-                if created_dt < cutoff_date:
+                if parse_datetime(created_str) < cutoff_date:
                     logger.info("    Skipping old game id=%s created=%s", item.get("id"), created_str)
                     hit_old_game = True
                     continue
@@ -223,20 +170,10 @@ def get_user_groups(user_id):
     return owned_groups
 
 
-def get_group_name(group_id):
-    """Fetch the name of a group."""
-    data = make_request(f"{GROUPS_URL}/v1/groups/{group_id}")
-    if data:
-        return data.get("name", f"Group {group_id}")
-    return f"Group {group_id}"
-
-
-def get_username(user_id):
-    """Fetch the username for a user ID."""
-    data = make_request(f"{USERS_URL}/v1/users/{user_id}")
-    if data:
-        return data.get("name", f"User {user_id}")
-    return f"User {user_id}"
+def get_name(url, fallback):
+    """Fetch a display name from a Roblox API endpoint."""
+    data = make_request(url)
+    return data.get("name", fallback) if data else fallback
 
 
 def read_input_csv(filepath):
@@ -328,20 +265,10 @@ def write_output_csv(filepath, games):
 
 def parse_datetime(dt_str):
     """Parse a Roblox API datetime string to a timezone-aware datetime."""
-    # Roblox uses ISO 8601 format like "2024-01-15T12:00:00.000Z"
+    # Strip fractional seconds for broad Python compatibility, then parse.
     dt_str = dt_str.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(dt_str)
-    except ValueError:
-        # Python < 3.11 doesn't handle all ISO 8601 variants;
-        # normalize fractional seconds to 6 digits for compatibility.
-        import re
-        m = re.match(r"(.*)\.(\d+)([+-]\d{2}:\d{2})$", dt_str)
-        if m:
-            frac = m.group(2).ljust(6, "0")[:6]
-            dt_str = f"{m.group(1)}.{frac}{m.group(3)}"
-            return datetime.fromisoformat(dt_str)
-        raise
+    dt_str = re.sub(r"\.\d+", "", dt_str)
+    return datetime.fromisoformat(dt_str)
 
 
 def main():
@@ -416,9 +343,9 @@ def main():
 
     # Process users
     for user_id in user_ids:
-        username = get_username(user_id)
+        username = get_name(f"{USERS_URL}/v1/users/{user_id}", f"User {user_id}")
         print(f"Fetching games for user {username} (ID: {user_id})...")
-        games = get_user_games(user_id, cutoff_date)
+        games = get_games(f"{BASE_URL}/v2/users/{user_id}/games", cutoff_date)
         print(f"  Found {len(games)} game(s)")
         for game in games:
             uid = game.get("id")
@@ -427,9 +354,9 @@ def main():
 
     # Process groups
     for group_id in group_ids:
-        group_name = get_group_name(group_id)
+        group_name = get_name(f"{GROUPS_URL}/v1/groups/{group_id}", f"Group {group_id}")
         print(f"Fetching games for group {group_name} (ID: {group_id})...")
-        games = get_group_games(group_id, cutoff_date)
+        games = get_games(f"{BASE_URL}/v2/groups/{group_id}/games", cutoff_date)
         print(f"  Found {len(games)} game(s)")
         for game in games:
             uid = game.get("id")
