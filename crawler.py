@@ -96,7 +96,9 @@ def get_games(url, cutoff_date=None):
     cursor = None
 
     while True:
-        params = {"sortOrder": "Desc", "limit": 100}
+        # User game listings only support limit=50; group listings support 100
+        limit = 100 if "/groups/" in url else 50
+        params = {"sortOrder": "Desc", "limit": limit}
         # accessFilter is only supported on group game listings
         if "/groups/" in url:
             params["accessFilter"] = 2
