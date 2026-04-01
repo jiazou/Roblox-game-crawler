@@ -31,7 +31,7 @@ GROUPS_URL = "https://groups.roblox.com"
 UNIVERSE_BATCH_SIZE = 100
 
 # Delay between API requests to avoid rate limiting (seconds)
-REQUEST_DELAY = 0.5
+REQUEST_DELAY = 1.0
 
 # Retry settings
 MAX_RETRIES = 6
