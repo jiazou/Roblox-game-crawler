@@ -34,7 +34,7 @@ UNIVERSE_BATCH_SIZE = 100
 REQUEST_DELAY = 0.5
 
 # Retry settings
-MAX_RETRIES = 5
+MAX_RETRIES = 6
 RETRY_BACKOFF = 2  # seconds, doubled each retry
 
 
@@ -70,6 +70,7 @@ def make_request(url, params=None, method="GET", json_body=None):
             else:
                 logger.error("  Request failed after %d attempts: %s", MAX_RETRIES, e)
                 return None
+    logger.warning("  Rate limited after %d attempts, giving up: %s", MAX_RETRIES, url)
     return None
 
 
