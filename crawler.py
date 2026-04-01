@@ -34,7 +34,7 @@ UNIVERSE_BATCH_SIZE = 100
 REQUEST_DELAY = 0.5
 
 # Retry settings
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 RETRY_BACKOFF = 2  # seconds, doubled each retry
 
 
