@@ -108,6 +108,8 @@ def get_games(url, cutoff_date=None):
 
         data = make_request(url, params)
         if not data:
+            if not universes and cursor is None:
+                return None  # first page failed — signal failure
             break
 
         page_items = data.get("data", [])
@@ -346,28 +348,37 @@ def main():
 
     # Collect all universe listings with their owner info
     universe_owner_map = {}  # universe_id -> (owner_type, owner_id, owner_name)
+    failed_fetches = []  # list of (type, id, name) that failed
 
     # Process users
     for user_id in user_ids:
         username = get_name(f"{USERS_URL}/v1/users/{user_id}", f"User {user_id}")
         print(f"Fetching games for user {username} (ID: {user_id})...")
         games = get_games(f"{BASE_URL}/v2/users/{user_id}/games", cutoff_date)
-        print(f"  Found {len(games)} game(s)")
-        for game in games:
-            uid = game.get("id")
-            if uid:
-                universe_owner_map[uid] = ("user", user_id, username)
+        if games is None:
+            failed_fetches.append(("user", user_id, username))
+            print("  FAILED to fetch games")
+        else:
+            print(f"  Found {len(games)} game(s)")
+            for game in games:
+                uid = game.get("id")
+                if uid:
+                    universe_owner_map[uid] = ("user", user_id, username)
 
     # Process groups
     for group_id in group_ids:
         group_name = get_name(f"{GROUPS_URL}/v1/groups/{group_id}", f"Group {group_id}")
         print(f"Fetching games for group {group_name} (ID: {group_id})...")
         games = get_games(f"{BASE_URL}/v2/groups/{group_id}/games", cutoff_date)
-        print(f"  Found {len(games)} game(s)")
-        for game in games:
-            uid = game.get("id")
-            if uid:
-                universe_owner_map[uid] = ("group", group_id, group_name)
+        if games is None:
+            failed_fetches.append(("group", group_id, group_name))
+            print("  FAILED to fetch games")
+        else:
+            print(f"  Found {len(games)} game(s)")
+            for game in games:
+                uid = game.get("id")
+                if uid:
+                    universe_owner_map[uid] = ("group", group_id, group_name)
 
     if not universe_owner_map:
         print("No games found for any of the specified users/groups.")
@@ -426,6 +437,20 @@ def main():
     # Write output
     write_output_csv(args.output, results)
     print(f"\nResults written to {args.output}")
+
+    # Summary: failed fetches
+    if failed_fetches:
+        print(f"\n--- Failed to fetch ({len(failed_fetches)}) ---")
+        for ftype, fid, fname in failed_fetches:
+            print(f"  [{ftype}] {fname} (ID: {fid})")
+
+    # Summary: new games found
+    if results:
+        print(f"\n--- New games found ({len(results)}) ---")
+        for r in results:
+            print(f"  [{r['owner_type']}] {r['name']} by {r['owner_name']} (created {r['created'][:10]}) {r['game_url']}")
+    else:
+        print("\n--- No new games found ---")
 
 
 if __name__ == "__main__":
