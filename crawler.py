@@ -96,7 +96,10 @@ def get_games(url, cutoff_date=None):
     cursor = None
 
     while True:
-        params = {"sortOrder": "Desc", "limit": 100, "accessFilter": 2}
+        params = {"sortOrder": "Desc", "limit": 100}
+        # accessFilter is only supported on group game listings
+        if "/groups/" in url:
+            params["accessFilter"] = 2
         if cursor:
             params["cursor"] = cursor
 
