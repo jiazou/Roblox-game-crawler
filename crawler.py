@@ -57,6 +57,9 @@ def make_request(url, params=None, method="GET", json_body=None):
                 logger.warning("  Rate limited, waiting %ds...", wait)
                 time.sleep(wait)
                 continue
+            if resp.status_code == 400:
+                logger.warning("  Bad request (400) for %s — skipping (no retry)", resp.url)
+                return None
             resp.raise_for_status()
             body = resp.json()
             logger.debug("  -> body: %s", _truncate(json.dumps(body)))
@@ -327,11 +330,15 @@ def main():
 
     # Auto-discover groups owned by each user
     group_ids_set = set(group_ids)
+    user_ids_set = set(user_ids)
     for user_id in user_ids:
         print(f"Discovering groups owned by user ID {user_id}...")
         owned = get_user_groups(user_id)
         new_count = 0
         for gid, gname in owned:
+            if gid in user_ids_set:
+                logger.warning("  Skipping group ID %s (%s) — collides with a user ID", gid, gname)
+                continue
             if gid not in group_ids_set:
                 group_ids.append(gid)
                 group_ids_set.add(gid)
