@@ -323,6 +323,10 @@ def main():
     # Read input
     user_ids, group_ids = read_input_csv(args.input_csv)
     print(f"Loaded {len(user_ids)} user(s) and {len(group_ids)} group(s) from {args.input_csv}")
+    if user_ids:
+        print(f"  User IDs: {user_ids}")
+    if group_ids:
+        print(f"  Group IDs: {group_ids[:20]}{'...' if len(group_ids) > 20 else ''}")
 
     if not user_ids and not group_ids:
         print("No valid user or group IDs found in input. Exiting.")
